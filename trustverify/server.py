@@ -1,10 +1,11 @@
 """Loopback-only organizer mock services. No deployment or external targets."""
 
+import contextlib
 import json
 import sqlite3
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from cryptography.exceptions import InvalidSignature
@@ -16,6 +17,9 @@ MAX_BODY = 64 * 1024
 # Requests that fail authentication share one bucket per node; valid identities never draw from it.
 UNAUTHENTICATED_BURST = 20
 UNAUTHENTICATED_PER_SECOND = 10.0
+# Each connection gets its own thread, so one slow or stalled client cannot block the node.
+# Beyond this many in-flight connections a node answers 503 at once instead of queueing.
+MAX_CONNECTIONS = 64
 
 
 class TokenBucket:
@@ -41,13 +45,31 @@ def serve(directory, operator, node, port):
     authority = Authority(directory, operator)
     authority.recover()
     unauthenticated = TokenBucket(UNAUTHENTICATED_BURST, UNAUTHENTICATED_PER_SECOND)
+    slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.0"
+        server_version = "trustverify-node"
+        sys_version = ""
 
         def setup(self):
             super().setup()
             self.connection.settimeout(5)
+
+        def handle(self):
+            if not slots.acquire(blocking=False):
+                body = canonical({"error": "node connection capacity reached; retry later"})
+                headers = ("HTTP/1.0 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+                           f"Content-Length: {len(body)}\r\nServer: trustverify-node\r\n"
+                           "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n"
+                           "Connection: close\r\n\r\n").encode("ascii")
+                with contextlib.suppress(OSError):
+                    self.connection.sendall(headers + body)
+                return
+            try:
+                super().handle()
+            finally:
+                slots.release()
 
         def log_message(self, *_):
             pass
@@ -58,6 +80,7 @@ def serve(directory, operator, node, port):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
 
@@ -106,9 +129,12 @@ def serve(directory, operator, node, port):
                 self.respond(400, {"error": "invalid request or integrity check"})
             except (sqlite3.Error, OSError):
                 self.respond(503, {"error": "authority unavailable; access denied"})
+            except Exception:  # noqa: BLE001 - fail closed without a traceback or internal detail
+                self.respond(500, {"error": "internal error; access denied"})
 
         do_POST = do_GET
 
-    with HTTPServer(("127.0.0.1", port), Handler) as server:
+    ThreadingHTTPServer.daemon_threads = True
+    with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
         print(json.dumps({"node": node, "url": f"http://127.0.0.1:{server.server_address[1]}"}), flush=True)
         server.serve_forever(poll_interval=0.1)

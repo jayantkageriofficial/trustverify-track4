@@ -109,3 +109,93 @@ def test_anonymous_client_naming_admin_cannot_evict_its_pending_challenge(sandbo
             with urlopen(remotes["node-a"].url + "/challenge?device=operator-device", timeout=5) as reply:
                 assert reply.status == 200
         assert admin.api.request(pending)["actor"] == "operator"
+
+
+def test_stalled_clients_cannot_block_a_node(sandbox):
+    import socket
+    import time
+    from urllib.parse import urlsplit
+    authority, _, alice, _ = sandbox
+    with nodes(authority) as remotes:
+        target = urlsplit(remotes["node-a"].url)
+        stalled = []
+        for _ in range(8):
+            sock = socket.create_connection((target.hostname, target.port), timeout=5)
+            sock.sendall(b"POST /request HTTP/1.0\r\nContent-Length: 100\r\n")  # never finishes
+            stalled.append(sock)
+        try:
+            started = time.monotonic()
+            assert Client(remotes["node-a"], alice, authority.trust).call("access")["actor"] == "alice"
+            assert time.monotonic() - started < 2
+            with urlopen(remotes["node-a"].url + "/health", timeout=5) as reply:
+                assert "Python" not in reply.headers.get("Server", "")
+                assert reply.headers.get("X-Content-Type-Options") == "nosniff"
+        finally:
+            for sock in stalled:
+                sock.close()
+
+
+def test_connection_capacity_is_a_json_503_that_remote_can_handle(sandbox):
+    import json
+    import selectors
+    import socket
+    import subprocess
+    import sys
+    import time
+    from urllib.parse import urlsplit
+
+    authority, _, alice, _ = sandbox
+    # Use the production rejection path with a small cap instead of opening 64 stalled sockets.
+    code = ("import sys; from trustverify import server; server.MAX_CONNECTIONS=2; "
+            "server.serve(sys.argv[1], sys.argv[2], 'node-a', 0)")
+    process = subprocess.Popen([sys.executable, "-c", code, str(authority.directory), str(authority.operator)],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stalled = []
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            assert selector.select(timeout=10)
+        url = json.loads(process.stdout.readline())["url"]
+        api = Remote(url, "node-a")
+        client = Client(api, alice, authority.trust)
+        pending = client.envelope("access", {})
+        target = urlsplit(url)
+        for _ in range(2):
+            sock = socket.create_connection((target.hostname, target.port), timeout=3)
+            sock.sendall(b"GET /health HTTP/1.0\r\nX-Test: hold")
+            stalled.append(sock)
+        for _ in range(50):
+            try:
+                with urlopen(url + "/health", timeout=3):
+                    pass
+            except HTTPError as error:
+                assert error.code == 503
+                assert error.headers.get_content_type() == "application/json"
+                assert error.headers.get("X-Content-Type-Options") == "nosniff"
+                assert "capacity" in json.load(error)["error"]
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("connection slots never filled")
+        for request in (lambda: api.challenge(alice.device), lambda: api.request(pending)):
+            with pytest.raises(Denied, match="capacity") as denied:
+                request()
+            assert denied.value.status == 503
+        for sock in stalled:
+            sock.sendall(b"\r\n\r\n")
+            while sock.recv(4096):
+                pass
+            sock.close()
+        stalled.clear()
+        assert api.request(pending)["actor"] == "alice"
+    finally:
+        for sock in stalled:
+            sock.close()
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        process.stdout.close()
+        process.stderr.close()

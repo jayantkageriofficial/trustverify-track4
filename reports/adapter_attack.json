@@ -1,0 +1,106 @@
+{
+  "probes": 20,
+  "held": 20,
+  "results": [
+    {
+      "probe": "setup succeeds",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "malformed requests exit 0, disclose no content and raise signed alerts",
+      "held": true,
+      "detail": "20/20 malformed alerts"
+    },
+    {
+      "probe": "owner read allowed",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "look-alike and other identities denied",
+      "held": true,
+      "detail": "[]"
+    },
+    {
+      "probe": "unknown asset denied",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "replayed request_id after revocation denied",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "replay does not change the recorded decision",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "revoked owner denied and audited",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "peer unaffected by revocation",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "repeat revoke keeps the actor revoked",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "injected text cannot forge a second event or change the actor",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "protected_read proof verifies with the recipient's ML-KEM secret",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "protected_read denies revoked, non-owner and malformed keys",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "parallel requests keep a verifiable chain",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "edited state (cleared revocation, changed owner) fails closed",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "truncated audit log fails closed",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "probing raised alerts",
+      "held": true,
+      "detail": "cross_owner_access, disabled_actor_access, malformed_request, request_id_replay, revoked_actor_access"
+    },
+    {
+      "probe": "synthetic key material never printed",
+      "held": true,
+      "detail": ""
+    },
+    {
+      "probe": "world-writable pre-planted state directory is not trusted",
+      "held": true,
+      "detail": "mode 0o777"
+    },
+    {
+      "probe": "symlinked state directory is refused",
+      "held": true,
+      "detail": ""
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 TOOLKIT ?= ../Track-4-Toolkit
-.PHONY: setup test test-adapter validate demo evaluate brief practice bench
+.PHONY: setup test test-adapter validate demo evaluate brief practice bench bench-nodes attack
 setup:
 	uv sync --extra messaging --extra dev --locked
 test:
@@ -18,3 +18,7 @@ practice:
 	uv run --locked python -m trustverify practice --toolkit $(TOOLKIT)/practice --output reports/practice.json
 bench:
 	uv run --locked python scripts/bench_adapter.py --output reports/adapter_bench.json
+bench-nodes:
+	uv run --extra messaging --locked python scripts/bench_nodes.py --output reports/node_bench.json
+attack:
+	uv run --locked python scripts/attack_adapter.py --output reports/adapter_attack.json

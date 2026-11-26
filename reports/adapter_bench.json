@@ -4,26 +4,26 @@
     "machine": "x86_64",
     "note": "fresh process per request, as the grader runs it; includes interpreter start-up"
   },
-  "setup_1000_assets_ms": 50.1,
+  "setup_1000_assets_ms": 55.5,
   "read": {
-    "median_ms": 45.4,
-    "p95_ms": 62.4,
+    "median_ms": 44.3,
+    "p95_ms": 59.4,
     "samples": 500
   },
-  "read_first_10pct_median_ms": 45.4,
-  "read_last_10pct_median_ms": 43.9,
+  "read_first_10pct_median_ms": 42.7,
+  "read_last_10pct_median_ms": 45.1,
   "protected_read": {
-    "median_ms": 44.1,
-    "p95_ms": 62.3,
+    "median_ms": 45.0,
+    "p95_ms": 50.1,
     "samples": 50
   },
   "audit": {
-    "median_ms": 40.4,
-    "p95_ms": 52.7,
+    "median_ms": 39.5,
+    "p95_ms": 52.6,
     "samples": 50
   },
-  "verify_audit_ms": 187.1,
+  "verify_audit_ms": 171.6,
   "verified_events": 551,
   "audit_bytes_per_event": 4850,
-  "state_document_bytes": 370589
+  "state_document_bytes": 370674
 }

@@ -20,6 +20,8 @@ Clients refuse HTTP redirects so a mock service cannot redirect requests outside
 | Watch the live log and contain alerts | `python -m trustverify watch --state ... --operator ... --identity ...` (see [Detection and evaluation](#detection-and-evaluation)) |
 | Detector on toolkit practice data | `python -m trustverify practice --toolkit ../Track-4-Toolkit/practice` |
 | Measure adapter overhead | `python scripts/bench_adapter.py --output reports/adapter_bench.json` |
+| Measure signed HTTP request latency | `python scripts/bench_nodes.py --output reports/node_bench.json` |
+| Attack the adapter like an assessor | `python scripts/attack_adapter.py --output reports/adapter_attack.json` |
 
 Every section below expands one of these rows.
 
@@ -34,9 +36,20 @@ Every section below expands one of these rows.
 | `revoke` | Permanently revokes the actor; other actors keep access. |
 | `audit` | Returns the recorded `request_id` and `decision`. |
 | `protected_read` | Same policy, then ML-KEM-768 encapsulation to the supplied raw public key (1184 bytes required) and `proof = HMAC-SHA-256(shared_secret, challenge + body)`. The shared secret never leaves the process. |
+| `alerts` | Extra operator view: signed alert events raised by suspicious denials (see below). |
 | `verify_audit` | Extra operator check: sequence, hash chain and every ML-DSA-65 signature. Pass `audit_key_sha256` (from `setup`) and optionally a `checkpoint` `{"seq","head"}` from an earlier run to detect a log rewritten and re-signed under a substituted key, or truncated. Replies with `anchored: true` only when pinned. |
 
 State lives in `TRACK4_STATE_DIR`, or `<system temp>/trustverify-track4` when unset, and is written atomically (exclusive lock, temp file, fsync, rename) before the reply is printed. The audit signing key and its public verification key are kept in a separate `keys/` directory (0700). Each load verifies the cached setup signature against that protected public key before trusting any body hash. When upgrading an older adapter state without the public-key file, the service first proves that the cached public key matches the protected private key by signing and verifying a fresh random probe. **At-rest confidentiality of adapter bodies relies on file permissions (0600 files, 0700 directory):** the judging runtime offers no vetted symmetric cipher (pqcrypto has none and `cryptography` is absent), and we do not build one ourselves. Integrity is protected by the verified signed body hashes. The full prototype does encrypt at rest (AES-256-GCM inbox and backups). [threat-model.json](threat-model.json) declares `protected-resource` / `identity-check`, which is what the adapter enforces.
+
+**Fail-closed replies.** Every request ends with exit status 0 and exactly one JSON object, so a fuzzed or hostile request can never crash the worker or produce mixed output. Requests that cannot be processed get a deny-shaped reply with a fixed error string: `{"decision":"deny","error":...}` for reads and unknown input, `{"ready":false,...}` for `setup`, and `{"request_id":...,"decision":"deny","recorded":false,...}` for `audit`. Non-UTF-8, non-object, `NaN`/`Infinity` and oversized (over 64 MiB) input are all rejected this way.
+
+**Tamper-evident state.** The state document carries an HMAC-SHA-256 tag under a random key kept in `keys/`. An edited state file (a cleared revocation, a changed owner, a replaced body) fails the tag check and every read is denied. Access to the MAC key alone does not bypass the independently verified setup signature and body hashes; signing-key and pinned-root compromise remain outside the threat model. A log shorter than the committed state also fails closed. Trusted legacy state is upgraded during load, including `audit`, `verify_audit` and `alerts`: setup and audit signatures are checked, and a private `keys/adapter-state.migration` record binds the new key to the exact legacy-state digest before publication. Interrupted migration resumes that snapshot; the recovery record is durably removed before dispatch. An untagged state with an existing MAC key and no matching recovery record is refused, so stripping a tag cannot force an upgrade.
+
+**Shared temp directory.** When `TRACK4_STATE_DIR` is unset, `<system temp>/trustverify-track4` is created 0700 and refused if it already exists as a symlink, belongs to another user, or is group/world-writable, so a directory planted by another local user cannot capture or redirect state. Lock files and audit-log appends use `O_NOFOLLOW`.
+
+**Detection and response.** Denials that look like probing append a signed `alert` event next to the decision it explains: `cross_owner_access` (a valid identity asks for an asset it does not own), `revoked_actor_access`, `disabled_actor_access`, `request_id_replay` (a reused request ID, which is denied without changing the recorded decision) and `malformed_request`. Early validation failures, including missing request IDs, unknown operations, invalid JSON and invalid UTF-8, create sanitized `invalid_request` decisions and linked malformed-request alerts when existing state and its full audit chain verify. Unparseable identities remain anonymous; raw input and protected bodies are never logged. These records do not replace the request-ID decision index. Failed integrity checks leave the unverified log untouched. `{"op":"alerts"}` returns the most recent 200 for the operator; the full set stays in the verifiable log. The response is the denial itself plus the alert; the adapter does not lock identities out automatically, because adapter v1 callers expect a legitimate owner's later reads to keep working.
+
+**Self-assessment.** [scripts/attack_adapter.py](scripts/attack_adapter.py) runs 20 assessor-style probes, each in a fresh process like the grader: malformed and hostile input, look-alike identities, request-ID replay after revocation, log injection, `protected_read` key and challenge validation, parallel requests, on-disk state and log tampering, alerting, key-material leakage and a planted shared temp directory. All 20 hold; see [reports/adapter_attack.json](reports/adapter_attack.json). Before this hardening, 6 of them failed.
 
 Check it against the toolkit's validator with only the judging dependencies:
 
@@ -45,6 +58,7 @@ python3.12 -m venv /tmp/judge && /tmp/judge/bin/pip install 'pqcrypto==0.4.0' 'p
 git clone https://github.com/ScalerOpenSourceLabs/Track-4-Toolkit ../Track-4-Toolkit
 /tmp/judge/bin/python ../Track-4-Toolkit/validate.py --entry track4_service.py
 /tmp/judge/bin/python -m pytest -q tests/test_adapter.py tests/test_practice.py
+/tmp/judge/bin/python scripts/attack_adapter.py
 ```
 
 The adapter is a reduced policy surface (asset ownership, disable and revoke). **It trusts the caller-supplied `actor`**: adapter v1 passes identities as plain strings from the trusted grader worker, so the identity check is "is this actor the owner, and not disabled or revoked", not authentication of the caller. Likewise `setup` is unauthenticated by contract and replaces all state, including revocations. Authenticated identities (ML-DSA-signed, challenge-bound requests) are in the full prototype. Rotation, multi-node enforcement, messaging and recovery are demonstrated by the full prototype below.
@@ -222,13 +236,15 @@ Adapter, measured as the grader runs it (a fresh process per request, so interpr
 
 | Operation | Median | p95 |
 |---|---|---|
-| `setup` (1,000 assets) | 50.1 ms | |
-| `read` (500 requests) | 45.4 ms | 62.4 ms |
-| `protected_read` (ML-KEM-768 + HMAC) | 44.1 ms | 62.3 ms |
-| `audit` | 40.4 ms | 52.7 ms |
-| `verify_audit` (551 events, every signature) | 187.1 ms | |
+| `setup` (1,000 assets) | 55.5 ms | |
+| `read` (500 requests) | 44.3 ms | 59.4 ms |
+| `protected_read` (ML-KEM-768 + HMAC) | 45.0 ms | 50.1 ms |
+| `audit` | 39.5 ms | 52.6 ms |
+| `verify_audit` (551 events, every signature) | 171.6 ms | |
 
-Read latency stays flat as the log grows (first 10%: 45.4 ms, last 10%: 43.9 ms), because each request appends one line to `adapter-audit.jsonl` and rewrites only the small state document. Storage overhead is about 4,850 bytes per audit event, almost all of it the ML-DSA-65 signature.
+Read latency stays flat as the log grows (first 10%: 42.7 ms, last 10%: 45.1 ms), because each request appends one line to `adapter-audit.jsonl` and rewrites only the small state document. Storage overhead is about 4,850 bytes per audit event, almost all of it the ML-DSA-65 signature.
+
+Mock-service nodes, measured with [scripts/bench_nodes.py](scripts/bench_nodes.py) ([reports/node_bench.json](reports/node_bench.json)): a full signed request (fetch challenge, ML-DSA-65 sign and verify, permission check, signed audit commit) takes a median of 12.5 ms (p95 17.5 ms); eight concurrent clients sustain about 86 requests per second against one node; an unauthenticated denial costs 6.8 ms. Each node serves connections on separate threads with at most 64 in flight (JSON 503 beyond that), a 5-second socket timeout, no Python version banner and `X-Content-Type-Options: nosniff`. The client receives a normal `Denied` with status 503 at capacity and can retry after connections close; a stalled client below the cap does not serialize other connections.
 
 Full prototype, from [reports/demo.json](reports/demo.json): encrypt and sign a 96 KiB transfer in 2.2 ms (ciphertext 99,440 bytes for 98,304 bytes of plaintext, signed manifest 10,841 bytes); receive, decrypt and commit in 3.7 ms; revocation request to last observed node rejection 98 ms; live detection and containment 0.11 s after the event is logged. The authority rehashes its whole state on every request, which favours verifiability over scale.
 

@@ -27,6 +27,8 @@ jobs:
         run: python -m pytest -q -p no:cacheprovider tests/test_adapter.py tests/test_practice.py
       - name: Toolkit lost-device validator
         run: python ../Track-4-Toolkit/validate.py --entry track4_service.py
+      - name: Assessor-style adapter attacks
+        run: python scripts/attack_adapter.py
       - name: Detector on toolkit practice data
         run: python -m trustverify practice --toolkit ../Track-4-Toolkit/practice
 

@@ -1,0 +1,22 @@
+{
+  "environment": {
+    "python": "3.12.3",
+    "machine": "x86_64",
+    "note": "loopback HTTP, one shared SQLite authority, full challenge-sign-verify-audit round trip"
+  },
+  "signed_request": {
+    "median_ms": 12.54,
+    "p95_ms": 17.54,
+    "samples": 200
+  },
+  "concurrent": {
+    "workers": 8,
+    "requests": 200,
+    "requests_per_second": 85.9
+  },
+  "unauthenticated_denial": {
+    "median_ms": 6.77,
+    "samples": 20
+  },
+  "audit_events": 426
+}

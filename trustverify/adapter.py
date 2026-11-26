@@ -12,7 +12,13 @@ Anything else is denied without disclosing content.
 
 Every decision is appended to a hash-chained audit log whose records are signed
 with a per-setup ML-DSA-65 key. State is written atomically (temp file, fsync,
-rename) under an exclusive lock before the reply is printed.
+rename) under an exclusive lock before the reply is printed, and carries an
+HMAC-SHA-256 tag so an edited state file (a cleared revocation, a changed owner)
+fails closed instead of being honoured.
+
+Detection: denials that look like probing (another owner's asset, a revoked or
+disabled actor, a reused request ID, a malformed request) also append a signed
+``alert`` event. ``{"op":"alerts"}`` returns them for the operator.
 """
 
 import contextlib
@@ -22,6 +28,8 @@ import hmac
 import json
 import os
 import re
+import secrets
+import stat
 import tempfile
 import time
 import uuid
@@ -40,6 +48,7 @@ MAX_ID = 256
 MAX_CHALLENGE = 4096
 MAX_ENTRIES = 10_000
 MAX_BODY = 1024 * 1024
+MAX_ALERTS = 200
 # Identifiers are opaque to the adapter; reject only control characters and oversize values.
 IDENTIFIER = re.compile(r"[^\x00-\x1f\x7f]{1,%d}\Z" % MAX_ID)
 
@@ -50,8 +59,20 @@ class RequestError(ValueError):
 
 def state_directory():
     configured = os.environ.get("TRACK4_STATE_DIR")
-    base = Path(configured) if configured else Path(tempfile.gettempdir()) / "trustverify-track4"
-    base.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if configured:
+        # Supplied by the operator or checker: trusted as given.
+        base = Path(configured)
+        base.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return base
+    # The shared temp directory is writable by other local users, so a directory planted
+    # there in advance (a symlink, someone else's, or group/world-writable) is refused.
+    base = Path(tempfile.gettempdir()) / "trustverify-track4"
+    with contextlib.suppress(FileExistsError):
+        base.mkdir(mode=0o700)
+    info = os.lstat(base)
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+        raise RequestError("untrusted state directory")
     return base
 
 
@@ -81,10 +102,12 @@ class Store:
         # The signing key lives in its own 0700 directory, apart from the state it signs.
         self.key_path = self.directory / "keys" / "adapter-audit.key"
         self.public_path = self.key_path.with_suffix(".pub")
+        self.mac_path = self.directory / "keys" / "adapter-state.key"
+        self.migration_path = self.directory / "keys" / "adapter-state.migration"
 
     @contextlib.contextmanager
     def locked(self):
-        fd = os.open(self.directory / "adapter.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        fd = os.open(self.directory / "adapter.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "rb") as stream:
             fcntl.flock(stream, fcntl.LOCK_EX)
             try:
@@ -95,7 +118,31 @@ class Store:
     def load(self):
         if not self.path.exists():
             return None
-        state = json.loads(self.path.read_bytes())
+        try:
+            state = json.loads(self.path.read_bytes())
+            legacy = "mac" not in state
+            tag = state.pop("mac", None)
+            migration = json.loads(self.migration_path.read_bytes()) if self.migration_path.exists() else None
+            if legacy:
+                digest = hashlib.sha256(canonical(state)).hexdigest()
+                if migration is None:
+                    if self.mac_path.exists():
+                        raise ValueError("tag missing from protected state")
+                    key = secrets.token_bytes(32)
+                    migration = {"key": b64(key), "state_sha256": digest}
+                else:
+                    if not hmac.compare_digest(migration["state_sha256"], digest):
+                        raise ValueError("legacy state differs from pending migration")
+                    key = unb64(migration["key"])
+                    if len(key) != 32 or (self.mac_path.exists()
+                                         and not hmac.compare_digest(key, self.mac_path.read_bytes())):
+                        raise ValueError("migration key mismatch")
+            else:
+                expected = hmac.new(self.mac_path.read_bytes(), canonical(state), hashlib.sha256).hexdigest()
+                if not isinstance(tag, str) or not hmac.compare_digest(tag, expected):
+                    raise ValueError("state tag mismatch")
+        except (ValueError, KeyError, TypeError, AttributeError, OSError):
+            raise RequestError("state unreadable; integrity failure") from None
         if state.get("format") != FORMAT:
             raise RequestError("unsupported state format")
         public_key = unb64(state["audit_public"])
@@ -118,17 +165,32 @@ class Store:
             raise RequestError("audit log shorter than committed state; integrity failure")
         if size > state["audit_bytes"]:
             os.truncate(self.audit_path, state["audit_bytes"])
+        if legacy:
+            verify_audit(self, state)
+            # The protected intent authorizes recovery of this exact state if publication is interrupted.
+            atomic_write(self.migration_path, canonical(migration))
+            if not self.mac_path.exists():
+                atomic_write(self.mac_path, key)
+            self.save(state)
+        if self.migration_path.exists():
+            self.migration_path.unlink()
+            fd = os.open(self.migration_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         return state
 
     def save(self, state):
-        atomic_write(self.path, canonical(state))
+        tag = hmac.new(self.mac_path.read_bytes(), canonical(state), hashlib.sha256).hexdigest()
+        atomic_write(self.path, canonical({**state, "mac": tag}))
 
     def reset_audit(self):
         atomic_write(self.audit_path, b"")
 
     def append(self, record):
         line = canonical(record) + b"\n"
-        fd = os.open(self.audit_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        fd = os.open(self.audit_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "ab") as stream:
             stream.write(line)
             stream.flush()
@@ -155,6 +217,29 @@ def _append(store, state, event):
         state["setup_record"] = record
     if body.get("request_id") is not None:
         state["decisions"][body["request_id"]] = body["decision"]
+    return body["seq"]
+
+
+ALERT_RULES = {
+    "not the asset owner": ("cross_owner_access", "a valid identity asked for an asset it does not own"),
+    "actor revoked": ("revoked_actor_access", "a revoked identity is still presenting requests"),
+    "actor disabled": ("disabled_actor_access", "a disabled identity attempted access"),
+    "malformed request": ("malformed_request", "a request failed validation; possible fuzzing or injection"),
+    "request_id replay": ("request_id_replay", "a request ID was reused; replay of an earlier decision"),
+}
+
+
+def _alert(store, state, reason, related_seq, actor, asset, request_id=None):
+    """Append a signed alert for a suspicious denial. Fields are fixed strings or opaque IDs."""
+    if reason not in ALERT_RULES:
+        return
+    rule, explanation = ALERT_RULES[reason]
+    seq = _append(store, state, {"op": "alert", "rule": rule, "actor": actor, "asset": asset, "request_id": None,
+                                 "subject_request_id": request_id, "related_seq": related_seq,
+                                 "decision": "alert", "reason": explanation})
+    summary = {"seq": seq, "rule": rule, "actor": actor, "asset": asset, "related_seq": related_seq,
+               "subject_request_id": request_id}
+    state["alerts"] = (state.get("alerts", []) + [summary])[-MAX_ALERTS:]
 
 
 def key_fingerprint(public_key_b64):
@@ -237,9 +322,10 @@ def setup(store, request):
     public_key, secret_key = ml_dsa_65.generate_keypair()
     atomic_write(store.key_path, secret_key)
     atomic_write(store.public_path, public_key)
+    atomic_write(store.mac_path, secrets.token_bytes(32))
     state = {"format": FORMAT, "instance": uuid.uuid4().hex, "audit_public": b64(public_key),
              "owners": owners, "contents": contents, "disabled": sorted(set(disabled)),
-             "revoked": [], "decisions": {}, "seq": 0, "head": ZERO, "audit_bytes": 0}
+             "revoked": [], "decisions": {}, "alerts": [], "seq": 0, "head": ZERO, "audit_bytes": 0}
     store.reset_audit()
     _append(store, state, {"op": "setup", "actor": None, "asset": None, "request_id": None,
                            "decision": "allow", "reason": "initialized",
@@ -253,8 +339,7 @@ def setup(store, request):
 
 def read(store, state, request):
     request_id = _identifier(request.get("request_id"), "request_id")
-    if request_id in state["decisions"]:
-        # Never overwrite the recorded decision of an earlier request.
+    if _replayed(store, state, request, request_id):
         return {"decision": "deny"}
     try:
         actor = _identifier(request.get("actor"), "actor")
@@ -262,12 +347,29 @@ def read(store, state, request):
         decision, reason = _decide(state, actor, asset)
     except RequestError:
         actor, asset, decision, reason = None, None, "deny", "malformed request"
-    _append(store, state, {"op": "read", "actor": actor, "asset": asset, "request_id": request_id,
-                           "decision": decision, "reason": reason})
+    seq = _append(store, state, {"op": "read", "actor": actor, "asset": asset, "request_id": request_id,
+                                 "decision": decision, "reason": reason})
+    if decision != "allow":
+        _alert(store, state, reason, seq, actor, asset, request_id)
     store.save(state)
     if decision == "allow":
         return {"decision": "allow", "body": state["contents"][asset]}
     return {"decision": "deny"}
+
+
+def _replayed(store, state, request, request_id):
+    """A reused request ID never overwrites the recorded decision; it is denied and alerted."""
+    if request_id not in state["decisions"]:
+        return False
+    actor = request.get("actor") if isinstance(request.get("actor"), str) and IDENTIFIER.fullmatch(request["actor"]) else None
+    asset = request.get("asset") if isinstance(request.get("asset"), str) and IDENTIFIER.fullmatch(request["asset"]) else None
+    _alert(store, state, "request_id replay", None, actor, asset, request_id)
+    store.save(state)
+    return True
+
+
+def alerts(state):
+    return {"alerts": state.get("alerts", []), "count": len(state.get("alerts", []))}
 
 
 def revoke(store, state, request):
@@ -292,6 +394,12 @@ def audit(state, request):
 
 def protected_read(store, state, request):
     challenge = request.get("challenge")
+    # request_id is optional here; when supplied it is recorded so ``audit`` can answer for it.
+    request_id = request.get("request_id")
+    if request_id is not None:
+        request_id = _identifier(request_id, "request_id")
+        if _replayed(store, state, request, request_id):
+            return {"decision": "deny"}
     try:
         actor = _identifier(request.get("actor"), "actor")
         asset = _identifier(request.get("asset"), "asset")
@@ -303,10 +411,12 @@ def protected_read(store, state, request):
         decision, reason = _decide(state, actor, asset)
     except (RequestError, ValueError):
         actor, asset, decision, reason = None, None, "deny", "malformed request"
-    _append(store, state, {"op": "protected_read", "actor": actor, "asset": asset, "request_id": None,
-                           "decision": decision, "reason": reason,
-                           "challenge_sha256": hashlib.sha256(challenge.encode("utf-8")).hexdigest()
-                           if isinstance(challenge, str) else None})
+    seq = _append(store, state, {"op": "protected_read", "actor": actor, "asset": asset, "request_id": request_id,
+                                 "decision": decision, "reason": reason,
+                                 "challenge_sha256": hashlib.sha256(challenge.encode("utf-8")).hexdigest()
+                                 if isinstance(challenge, str) else None})
+    if decision != "allow":
+        _alert(store, state, reason, seq, actor, asset, request_id)
     store.save(state)
     if decision != "allow":
         return {"decision": "deny"}
@@ -315,6 +425,46 @@ def protected_read(store, state, request):
                      hashlib.sha256).hexdigest()
     del shared_secret
     return {"decision": "allow", "ciphertext": b64(ciphertext), "proof": proof}
+
+
+def error_reply(request, message):
+    """Fail-closed reply for a request that could not be processed: always a JSON object,
+    never protected content, and a deny decision where the operation has one."""
+    op = request.get("op") if isinstance(request, dict) else None
+    if op == "setup":
+        return {"ready": False, "error": message}
+    if op == "audit":
+        rid = request.get("request_id")
+        return {"request_id": rid if isinstance(rid, str) and IDENTIFIER.fullmatch(rid) else None,
+                "decision": "deny", "recorded": False, "error": message}
+    if op == "revoke":
+        return {"revoked": False, "error": message}
+    return {"decision": "deny", "error": message}
+
+
+def record_malformed(request, directory=None):
+    """Log sanitized validation failures only against verified existing state and history."""
+    try:
+        store = Store(directory or state_directory())
+        fields = request if isinstance(request, dict) else {}
+        ids = {}
+        for name in ("actor", "asset", "request_id", "op"):
+            value = fields.get(name)
+            ids[name] = value if isinstance(value, str) and IDENTIFIER.fullmatch(value) else None
+        with store.locked():
+            state = store.load()
+            if state is None:
+                return False
+            verify_audit(store, state)
+            seq = _append(store, state, {"op": "invalid_request", "requested_op": ids["op"],
+                                         "actor": ids["actor"], "asset": ids["asset"], "request_id": None,
+                                         "subject_request_id": ids["request_id"],
+                                         "decision": "deny", "reason": "malformed request"})
+            _alert(store, state, "malformed request", seq, ids["actor"], ids["asset"], ids["request_id"])
+            store.save(state)
+        return True
+    except Exception:  # noqa: BLE001 - reporting must never change the fail-closed reply
+        return False
 
 
 def dispatch(request, directory=None):
@@ -340,6 +490,8 @@ def dispatch(request, directory=None):
             return audit(state, request)
         if op == "protected_read":
             return protected_read(store, state, request)
+        if op == "alerts":
+            return alerts(state)
         if op == "verify_audit":
             return verify_audit(store, state, request.get("audit_key_sha256"), request.get("checkpoint"))
     raise RequestError("unknown op")

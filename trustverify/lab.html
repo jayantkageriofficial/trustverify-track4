@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="lab-token" content="__LAB_TOKEN__">
+<title>TrustVerify Lab</title>
+<style>
+:root {
+  --bg: #f5f7f9; --panel: #ffffff; --ink: #17212b; --muted: #5b6772; --line: #d9e0e6;
+  --accent: #12617b; --accent-ink: #ffffff; --ok: #1b7a43; --deny: #b4441b; --warn: #8a6a00;
+  --ok-bg: #e6f4ec; --deny-bg: #fbeae3; --warn-bg: #fbf3d6; --code: #eef2f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #11161b; --panel: #192129; --ink: #e5ebf0; --muted: #98a5b0; --line: #2b3640;
+    --accent: #4fb3d1; --accent-ink: #0d1a20; --ok: #6fd39a; --deny: #f29b78; --warn: #e8c766;
+    --ok-bg: #173325; --deny-bg: #3a2118; --warn-bg: #352d12; --code: #0f151a; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+header { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; }
+header .sub { color: var(--muted); font-size: 13px; }
+header .spacer { flex: 1; }
+.nodes { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); }
+.pill b { color: var(--ok); }
+main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px; max-width: 1500px; margin: 0 auto; }
+@media (max-width: 960px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+.card h2 { font-size: 15px; margin: 0 0 4px; }
+.card p.hint { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; }
+.tabs button { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.tabs button.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+section.tab { display: none; } section.tab.active { display: block; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-bottom: 10px; }
+label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+input, select, textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; min-width: 0; }
+textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; min-height: 90px; }
+button { font: inherit; cursor: pointer; border-radius: 6px; padding: 6px 12px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
+button.ghost { background: transparent; color: var(--accent); }
+button:disabled { opacity: .5; cursor: progress; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+.tag { display: inline-block; border-radius: 4px; padding: 0 6px; font-size: 11.5px; font-weight: 600; }
+.allowed, .verified, .held, .ready, .recovered, .allow, .done { background: var(--ok-bg); color: var(--ok); }
+.denied, .rejected, .deny { background: var(--deny-bg); color: var(--deny); }
+.error, .failed { background: var(--warn-bg); color: var(--warn); }
+#result .summary { font-size: 14px; margin: 6px 0 10px; }
+pre { background: var(--code); border-radius: 6px; padding: 10px; overflow: auto; max-height: 340px; font-size: 12px; margin: 0; white-space: pre-wrap; word-break: break-word; }
+ul.steps { margin: 0 0 10px; padding-left: 18px; }
+.scroll { max-height: 420px; overflow: auto; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.presets { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 8px; }
+.presets button { font-size: 12px; padding: 3px 8px; }
+.muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>TrustVerify Lab</h1>
+    <div class="sub">A private sandbox on your machine: three real nodes, synthetic identities, the real cryptography.</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="nodes" id="nodes"></div>
+  <button class="ghost" id="reset">Reset sandbox</button>
+</header>
+<main>
+  <div>
+    <div class="tabs" id="tabs">
+      <button data-tab="access" class="active">Identity &amp; access</button>
+      <button data-tab="messages">Messages &amp; files</button>
+      <button data-tab="recovery">Recovery &amp; integrity</button>
+      <button data-tab="detect">Detection</button>
+      <button data-tab="adapter">Grader adapter</button>
+    </div>
+
+    <section class="tab active" id="tab-access">
+      <div class="card">
+        <h2>Users and devices</h2>
+        <p class="hint">Each user has one active ML-DSA-65 device key. Permissions come only from the signed audit log.</p>
+        <table><thead><tr><th>User</th><th>Device / key</th><th>Services</th><th>Retired / revoked</th></tr></thead><tbody id="users"></tbody></table>
+      </div>
+      <div class="card">
+        <h2>Enroll, grant, access</h2>
+        <div class="row">
+          <label>User <input id="enroll-user" value="dave" size="10"></label>
+          <button data-act="enroll">Enroll / re-enrol device</button>
+        </div>
+        <div class="row">
+          <label>User <select class="user-select" id="grant-user"></select></label>
+          <label>Service <select class="service-select" id="grant-service"></select></label>
+          <label>Approval <select id="grant-mode">
+            <option value="approved">Approved by the security officer</option>
+            <option value="unapproved">No approval (suspicious)</option>
+            <option value="self_approved">Approved by the same admin</option>
+          </select></label>
+          <button data-act="grant">Grant</button>
+        </div>
+        <div class="row">
+          <label>User <select class="user-select" id="access-user"></select></label>
+          <label>Node <select class="node-select" id="access-node"></select></label>
+          <label>Key <select id="access-key"><option value="current">Current key</option><option value="retired">Old (rotated) key</option><option value="revoked">Revoked device</option></select></label>
+          <label>Note (try injecting text) <input id="access-note" placeholder='hello\n{"actor":"operator"}' size="24"></label>
+          <button data-act="access">Access service</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Rotate, revoke, replay</h2>
+        <p class="hint">Rotation has no grace period for new requests. Revocation reports how long each node took to enforce it.</p>
+        <div class="row">
+          <label>User <select class="user-select" id="key-user"></select></label>
+          <button data-act="rotate">Rotate key</button>
+          <button data-act="revoke">Revoke device</button>
+          <button data-act="replay" class="ghost">Replay a signed request</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-messages">
+      <div class="card">
+        <h2>Send a protected message or file</h2>
+        <p class="hint">End-to-end: hybrid ML-KEM-768 + X25519 HPKE to a one-use recipient offer, signed manifest, fragments spread across all three nodes.</p>
+        <div class="row">
+          <label>From <select class="user-select" id="send-from"></select></label>
+          <label>To <select class="user-select" id="send-to"></select></label>
+          <label>Drop fragments <input id="send-drop" type="number" min="0" max="8" value="0" style="width:70px"></label>
+          <label>Reorder <select id="send-reorder"><option value="">No</option><option value="1">Reverse order</option></select></label>
+          <label>Attack <select id="send-tamper">
+            <option value="none">None</option>
+            <option value="recipient">Change the recipient binding</option>
+            <option value="corrupt">Corrupt a fragment</option>
+            <option value="incomplete">Withhold the last fragment</option>
+          </select></label>
+        </div>
+        <textarea id="send-text">Quarterly numbers, eyes only.</textarea>
+        <div class="row" style="margin-top:8px">
+          <label>Or a file (up to 1 MiB) <input type="file" id="send-file"></label>
+          <button data-act="send">Encrypt and send</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-recovery">
+      <div class="card">
+        <h2>Crash during key rotation</h2>
+        <p class="hint">A real child process is killed mid-rotation; the authority then recovers a consistent key version.</p>
+        <div class="row">
+          <label>User <select class="user-select" id="crash-user"></select></label>
+          <label>Kill the process <select id="crash-phase"><option value="rotation_staged">before commit</option><option value="rotation_committed">after commit</option></select></label>
+          <button data-act="crash">Crash and recover</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Key backup</h2>
+        <div class="row">
+          <button data-act="backup">Back up and restore</button>
+          <button data-act="backup-corrupt" class="ghost">Restore a damaged backup</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Audit log integrity</h2>
+        <p class="hint">Exports the signed hash chain and verifies it against the operator's separately retained checkpoint.</p>
+        <div class="row">
+          <label>Tamper first <select id="verify-tamper">
+            <option value="none">Nothing</option><option value="edit">Flip a denied event to allowed</option>
+            <option value="actor">Change an event's actor</option><option value="truncate">Drop the last 3 events</option>
+            <option value="reorder">Swap two events</option>
+          </select></label>
+          <button data-act="verify">Verify log</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-detect">
+      <div class="card">
+        <h2>Explainable detection</h2>
+        <p class="hint">Try: grant carol <i>secrets</i> with no approval, then access frontend then secrets. Or use a revoked device.</p>
+        <div class="row">
+          <button data-act="detect">Run detector on the verified log</button>
+          <button data-act="watch">Live watch and contain</button>
+        </div>
+        <div id="alerts" class="scroll"></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-adapter">
+      <div class="card">
+        <h2>Grader adapter (track4_service.py)</h2>
+        <p class="hint">Each request runs in a fresh process, exactly as the judges run it. Seeded with maya/brief, omar/plan and a disabled lena/memo.</p>
+        <div id="adapter-state" class="muted mono"></div>
+        <div class="presets" id="presets"></div>
+        <textarea id="adapter-request">{"op":"read","actor":"maya","asset":"brief","request_id":"lab-1"}</textarea>
+        <div class="row" style="margin-top:8px">
+          <button data-act="adapter">Send request</button>
+          <label>Actor <input id="pr-actor" value="maya" size="8"></label>
+          <label>Asset <input id="pr-asset" value="brief" size="8"></label>
+          <button data-act="protected_read" class="ghost">protected_read with a fresh ML-KEM key</button>
+        </div>
+        <div class="row">
+          <button data-act="tamper-state" class="ghost">Edit state file on disk</button>
+          <button data-act="tamper-log" class="ghost">Cut the audit log</button>
+          <button data-act="attacks">Run the 20 assessor attacks</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div>
+    <div class="card" id="result">
+      <h2>Result</h2>
+      <div class="summary muted">Pick an action on the left. Denials are often the secure, expected result.</div>
+      <div id="result-body"></div>
+    </div>
+    <div class="card">
+      <h2>Signed audit log <span class="muted" id="event-count"></span></h2>
+      <div class="scroll"><table><thead><tr><th>#</th><th>Node</th><th>Actor</th><th>Action</th><th>Outcome</th></tr></thead><tbody id="events"></tbody></table></div>
+    </div>
+    <div class="card">
+      <h2>Your actions</h2>
+      <div class="scroll"><table><tbody id="history"></tbody></table></div>
+    </div>
+  </div>
+</main>
+<script>
+const TOKEN = document.querySelector('meta[name="lab-token"]').content;
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+let state = null;
+
+async function api(path, body) {
+  const options = {headers: {"X-Lab-Token": TOKEN}};
+  if (body !== undefined) { options.method = "POST"; options.body = JSON.stringify(body); options.headers["Content-Type"] = "application/json"; }
+  const response = await fetch(path, options);
+  return response.json();
+}
+
+function fillSelect(select, values, keep) {
+  const previous = select.value;
+  select.innerHTML = values.map((v) => `<option value="${esc(v.value)}">${esc(v.label)}</option>`).join("");
+  if (keep && values.some((v) => v.value === previous)) select.value = previous;
+}
+
+function render() {
+  if (!state) return;
+  $("nodes").innerHTML = state.nodes.map((n) => `<span class="pill"><b>&#9679;</b> ${esc(n.node)} · ${esc(n.service)}</span>`).join("");
+  const users = state.users.map((u) => ({value: u.name, label: u.name}));
+  document.querySelectorAll(".user-select").forEach((s) => fillSelect(s, users, true));
+  if (!$("send-to").dataset.init && users.length > 1) { $("send-to").value = users[1].value; $("send-to").dataset.init = 1; }
+  document.querySelectorAll(".service-select").forEach((s) => fillSelect(s, state.services.map((v) => ({value: v, label: v})), true));
+  document.querySelectorAll(".node-select").forEach((s) => fillSelect(s, state.nodes.map((n) => ({value: n.node, label: `${n.node} (${n.service})`})), true));
+  $("users").innerHTML = state.users.map((u) => `<tr><td><b>${esc(u.name)}</b></td><td class="mono">${esc(u.device)} v${u.version}</td>
+    <td>${u.permissions.map((p) => `<span class="tag allowed">${esc(p)}</span>`).join(" ") || '<span class="muted">none</span>'}</td>
+    <td class="mono">${u.retired_versions.map((v) => "v" + v).join(", ")}${u.revoked_devices.length ? " · revoked: " + u.revoked_devices.map(esc).join(", ") : ""}</td></tr>`).join("");
+  $("event-count").textContent = `(${state.event_count} events, newest first)`;
+  $("events").innerHTML = state.events.map((e) => `<tr><td>${e.seq}</td><td>${esc(e.node)}</td><td>${esc(e.actor)}</td>
+    <td>${esc(e.action)}${e.reason ? `<div class="muted">${esc(e.reason)}</div>` : ""}</td><td><span class="tag ${esc(e.outcome)}">${esc(e.outcome)}</span></td></tr>`).join("");
+  $("history").innerHTML = state.history.map((h) => `<tr><td><span class="tag ${esc(h.outcome)}">${esc(h.outcome)}</span></td><td>${esc(h.summary)}</td></tr>`).join("");
+  const a = state.adapter;
+  $("adapter-state").textContent = a.ready ? `owners ${JSON.stringify(a.owners)} · disabled ${JSON.stringify(a.disabled)} · revoked ${JSON.stringify(a.revoked)} · ${a.events} signed events` : "adapter not set up";
+}
+
+function showResult(result) {
+  const outcome = result.outcome || (result.ok ? "done" : "error");
+  let body = "";
+  const d = result.detail || {};
+  if (d.steps) body += `<ul class="steps">${d.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>`;
+  if (d.text) body += `<p><b>Decrypted message:</b> ${esc(d.text)}</p>`;
+  if (d.alerts) body += alertTable(d.alerts);
+  if (d.results) body += `<table>${d.results.map((r) => `<tr><td><span class="tag ${r.held ? "held" : "failed"}">${r.held ? "held" : "FAILED"}</span></td><td>${esc(r.probe)}</td></tr>`).join("")}</table>`;
+  body += `<details ${d.alerts || d.results ? "" : "open"}><summary class="muted">Full detail</summary><pre>${esc(JSON.stringify(d, null, 2))}</pre></details>`;
+  $("result").querySelector(".summary").innerHTML = `<span class="tag ${esc(outcome)}">${esc(outcome)}</span> ${esc(result.summary)}`;
+  $("result-body").innerHTML = body;
+  if (d.alerts) $("alerts").innerHTML = alertTable(d.alerts);
+}
+
+function alertTable(alerts) {
+  if (!alerts.length) return '<p class="muted">No alerts.</p>';
+  return `<table><thead><tr><th>Rule</th><th>Identity</th><th>Services</th><th>Events</th><th>Why / response</th></tr></thead><tbody>${alerts.map((a) =>
+    `<tr><td><span class="tag denied">${esc(a.rule)}</span></td><td>${esc(a.identity)}</td><td>${esc((a.services || []).join(" → "))}</td>
+    <td class="mono">${esc((a.events || []).join(", "))}</td><td>${esc(a.explanation)}${a.response ? `<div class="muted">response: ${esc(a.response.action)} ${esc(a.response.status || a.response.reason || "")}</div>` : ""}</td></tr>`).join("")}</tbody></table>`;
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+const handlers = {
+  "enroll": () => ["enroll", {user: $("enroll-user").value}],
+  "grant": () => ["grant", {user: $("grant-user").value, service: $("grant-service").value, mode: $("grant-mode").value}],
+  "access": () => ["access", {user: $("access-user").value, node: $("access-node").value, key: $("access-key").value, note: $("access-note").value.replace(/\\n/g, "\n")}],
+  "rotate": () => ["rotate", {user: $("key-user").value}],
+  "revoke": () => ["revoke", {user: $("key-user").value}],
+  "replay": () => ["replay", {user: $("key-user").value}],
+  "send": async () => {
+    const file = $("send-file").files[0];
+    const args = {sender: $("send-from").value, recipient: $("send-to").value, drop: parseInt($("send-drop").value || "0", 10),
+      reorder: !!$("send-reorder").value, tamper: $("send-tamper").value, text: $("send-text").value};
+    if (file) { if (file.size > 1048576) throw new Error("file must be at most 1 MiB"); args.payload_b64 = await fileToBase64(file); args.filename = file.name; }
+    return ["send", args];
+  },
+  "crash": () => ["crash", {user: $("crash-user").value, phase: $("crash-phase").value}],
+  "backup": () => ["backup", {corrupt: false}],
+  "backup-corrupt": () => ["backup", {corrupt: true}],
+  "verify": () => ["verify", {tamper: $("verify-tamper").value}],
+  "detect": () => ["detect", {}],
+  "watch": () => ["watch", {}],
+  "adapter": () => { const text = $("adapter-request").value; let request; try { request = JSON.parse(text); } catch { request = text; } return ["adapter", {request}]; },
+  "protected_read": () => ["protected_read", {actor: $("pr-actor").value, asset: $("pr-asset").value}],
+  "tamper-state": () => ["adapter_tamper", {kind: "clear_revocations"}],
+  "tamper-log": () => ["adapter_tamper", {kind: "truncate_log"}],
+  "attacks": () => ["attacks", {}],
+};
+
+const presets = [
+  ["Owner read", {op: "read", actor: "maya", asset: "brief", request_id: "lab-r1"}],
+  ["Wrong owner", {op: "read", actor: "omar", asset: "brief", request_id: "lab-r2"}],
+  ["Disabled user", {op: "read", actor: "lena", asset: "memo", request_id: "lab-r3"}],
+  ["Revoke maya", {op: "revoke", actor: "maya"}],
+  ["Audit lab-r1", {op: "audit", request_id: "lab-r1"}],
+  ["Replay lab-r1", {op: "read", actor: "maya", asset: "brief", request_id: "lab-r1"}],
+  ["Alerts", {op: "alerts"}],
+  ["Verify audit", {op: "verify_audit"}],
+  ["Injection", {op: "read", actor: 'eve","decision":"allow', asset: "plan", request_id: "lab-r4"}],
+  ["Garbage", "not json at all"],
+];
+$("presets").innerHTML = presets.map(([label], i) => `<button class="ghost" data-preset="${i}">${esc(label)}</button>`).join("");
+$("presets").addEventListener("click", (event) => {
+  const index = event.target.dataset.preset;
+  if (index === undefined) return;
+  const value = presets[index][1];
+  $("adapter-request").value = typeof value === "string" ? value : JSON.stringify(value);
+});
+
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-act]");
+  if (!button) return;
+  const all = document.querySelectorAll("button");
+  all.forEach((b) => (b.disabled = true));
+  $("result").querySelector(".summary").innerHTML = '<span class="muted">Running...</span>';
+  try {
+    const [action, args] = await handlers[button.dataset.act]();
+    showResult(await api("/api/" + action, args));
+  } catch (error) {
+    showResult({ok: false, summary: error.message, outcome: "error"});
+  } finally {
+    all.forEach((b) => (b.disabled = false));
+    await refresh();
+  }
+});
+
+$("reset").addEventListener("click", async () => {
+  $("reset").disabled = true;
+  showResult(await api("/api/reset", {}));
+  $("reset").disabled = false;
+  await refresh();
+});
+
+$("tabs").addEventListener("click", (event) => {
+  const tab = event.target.dataset.tab;
+  if (!tab) return;
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll("section.tab").forEach((s) => s.classList.toggle("active", s.id === "tab-" + tab));
+});
+
+async function refresh() { state = await api("/api/state"); render(); }
+refresh();
+</script>
+</body>
+</html>

@@ -19,6 +19,7 @@ Clients refuse HTTP redirects so a mock service cannot redirect requests outside
 | Run the three-node protected workflow | `python -m trustverify demo --directory runtime/first-demo` |
 | Watch the live log and contain alerts | `python -m trustverify watch --state ... --operator ... --identity ...` (see [Detection and evaluation](#detection-and-evaluation)) |
 | Detector on toolkit practice data | `python -m trustverify practice --toolkit ../Track-4-Toolkit/practice` |
+| Try it yourself in the browser (optional lab) | `pip install '.[messaging]'` then `python -m trustverify ui` |
 | Measure adapter overhead | `python scripts/bench_adapter.py --output reports/adapter_bench.json` |
 | Measure signed HTTP request latency | `python scripts/bench_nodes.py --output reports/node_bench.json` |
 | Attack the adapter like an assessor | `python scripts/attack_adapter.py --output reports/adapter_attack.json` |
@@ -62,6 +63,24 @@ git clone https://github.com/ScalerOpenSourceLabs/Track-4-Toolkit ../Track-4-Too
 ```
 
 The adapter is a reduced policy surface (asset ownership, disable and revoke). **It trusts the caller-supplied `actor`**: adapter v1 passes identities as plain strings from the trusted grader worker, so the identity check is "is this actor the owner, and not disabled or revoked", not authentication of the caller. Likewise `setup` is unauthenticated by contract and replaces all state, including revocations. Authenticated identities (ML-DSA-signed, challenge-bound requests) are in the full prototype. Rotation, multi-node enforcement, messaging and recovery are demonstrated by the full prototype below.
+
+## Interactive lab (optional)
+
+`python -m trustverify ui` opens a local web page where anyone can run their own scenarios against the real prototype instead of reading test output. It starts three real loopback node processes over a fresh authority, seeds alice, bob and carol, and seeds a separate grader-adapter state. Nothing in it is on the grading path: `track4_service.py` never imports it, and it adds no dependencies (standard-library `http.server`, plain HTML and JavaScript; it needs the `messaging` extra like the rest of the prototype).
+
+| Tab | What you can try |
+|---|---|
+| Identity & access | Enrol or re-enrol devices; grant a service with an officer approval, with no approval, or self-approved (refused by the two-person rule); access any node with the current, rotated or revoked key; inject text into the request note; rotate (every node rejects the old key, no grace period); revoke (per-node enforcement time, other users unaffected); replay a signed request |
+| Messages & files | Send text or a file up to 1 MiB end to end with hybrid ML-KEM-768 + X25519 HPKE; drop or reorder fragments; change the recipient binding, corrupt a fragment or withhold the last one, and watch each rejected |
+| Recovery & integrity | Kill a real rotation process before or after commit and recover; restore a good and a damaged backup; tamper with the exported audit log (edit, change actor, truncate, reorder) and verify it against the retained checkpoint |
+| Detection | Run the explainable detector over the verified log, or the live watcher that contains unapproved grants automatically |
+| Grader adapter | Send any request (or one of the presets, including garbage and injection) to `track4_service.py` in a fresh process; do a `protected_read` with a fresh ML-KEM-768 key and check the HMAC proof; edit the adapter's files on disk; run the 20 assessor-style attacks |
+
+The right-hand side shows each result with its explanation and the live signed audit log. **Reset sandbox** starts over with fresh keys.
+
+The lab binds to `127.0.0.1` only, rejects requests whose `Host` header is not local (so DNS rebinding cannot reach it), and requires a random token generated at each launch on every API call, so other web pages open in the same browser cannot drive it. All state lives in a temporary directory that is deleted on exit (Ctrl+C). Options: `--port 0` picks a free port, `--no-browser` prints the URL instead of opening it.
+
+![Detection tab after an unapproved grant and a revoked device](docs/lab/detection.png)
 
 ## Clean-machine setup
 

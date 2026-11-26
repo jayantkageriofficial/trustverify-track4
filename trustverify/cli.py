@@ -65,6 +65,9 @@ def parser():
     live.add_argument("--once", action="store_true", help="poll once and exit")
     live.add_argument("--no-respond", action="store_true", help="alert only; take no containment action")
     live.add_argument("--output", default=None, help="append alerts as JSON lines")
+    lab = commands.add_parser("ui", help="interactive local lab in the browser (127.0.0.1 only)")
+    lab.add_argument("--port", type=int, default=8765, help="local port (0 picks a free one)")
+    lab.add_argument("--no-browser", action="store_true", help="print the URL instead of opening a browser")
     evaluation = commands.add_parser("evaluate")
     evaluation.add_argument("--input", default="fixtures/labelled_logs.json")
     evaluation.add_argument("--output")
@@ -111,6 +114,9 @@ def main(argv=None):
             identity = Identity.generate(args.device)
             identity.save(directory)
             result = {"device": identity.device, "public": public(identity.key)}
+        elif args.command == "ui":
+            from .ui import run as run_ui
+            return run_ui(args.port, open_browser=not args.no_browser)
         elif args.command == "serve":
             from .server import serve
             serve(args.state, args.operator, args.node, args.port)

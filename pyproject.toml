@@ -22,7 +22,7 @@ trustverify = "trustverify.cli:main"
 include = ["trustverify*"]
 
 [tool.setuptools.package-data]
-trustverify = ["service_policy.json"]
+trustverify = ["service_policy.json", "lab.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

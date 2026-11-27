@@ -354,9 +354,9 @@ The container launches only loopback services and runs as an unprivileged user. 
 
 - Two-page brief: [docs/project-brief.pdf](docs/project-brief.pdf). Page two is the one-page threat model.
 - Five-minute walkthrough script: [DEMO.md](DEMO.md).
-- Public repository/video URLs: [submission.json](submission.json). **The video URL is not filled in yet; add it before final submission.**
+- Five-minute demo video: [https://drive.google.com/file/d/1vTheFON5wPBXJZHDf5MYALoP8QiZPza4/view?usp=sharing](https://drive.google.com/file/d/1vTheFON5wPBXJZHDf5MYALoP8QiZPza4/view?usp=sharing) (narration is a synthetic voice over a real recorded run of the lab and checks). Both URLs are also in [submission.json](submission.json).
 - Regenerate the PDF: `python scripts/build_brief.py`. Fill the URL fields in `submission.json` when available; populated URLs become clickable PDF links.
 
 Known limits: "revocation across nodes" means three HTTP processes reading one shared SQLite authority, so measured revocation times are observation bounds, not replication latency. The two-person rule assumes the two administrator identities belong to different people. The audit signing key sits beside the authority database; the operator-side checkpoint and tombstones are what expose tampering. Trusted single-host control plane and OS, loopback HTTP without TLS, central availability dependency, 1 MiB message limit, 120-second admission grants, offline workflow-specific detection, no audit-key rotation, no session resumption, no post-compromise healing and no claim of independently audited or production-secure application protocol. Revocation cannot erase plaintext or keys already copied by a recipient. Whole-state hashing favors auditability over throughput and needs redesign for large stores.
 
-Publish only source/public evidence, and supply the required public five-minute recording before final submission.
+Publish only source/public evidence.

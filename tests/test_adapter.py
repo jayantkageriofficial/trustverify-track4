@@ -266,6 +266,15 @@ def test_probing_raises_signed_alerts(state):
     assert call(state, op="audit", request_id="r101")[1]["decision"] == "allow"
     events = [r["body"] for r in read_log(state) if r["body"]["op"] == "alert"]
     assert [e["rule"] for e in events] == rules and call(state, op="verify_audit")[1]["verified"] is True
+    # Every alert names the identity, services, supporting events, rule and explanation.
+    for alert in reply["alerts"]:
+        assert alert["identity"] == "maya" and alert["services"] == ["protected-resource"]
+        assert alert["events"] and alert["seq"] in alert["events"] and alert["explanation"]
+        assert alert["operation"] == "read" and alert["attack_technique"].startswith("T1")
+    cross = reply["alerts"][0]
+    assert cross["asset"] == "plan" and cross["related_seq"] in cross["events"]
+    decision = next(r["body"] for r in read_log(state) if r["body"]["seq"] == cross["related_seq"])
+    assert decision["request_id"] == "r100" and decision["decision"] == "deny"
 
 
 def test_protected_read_request_id_is_audited(state):

@@ -15,7 +15,7 @@ Clients refuse HTTP redirects so a mock service cannot redirect requests outside
 | Goal | Commands |
 |---|---|
 | Check the grader adapter (judging runtime: Python 3.12 + pqcrypto only) | `pip install 'pqcrypto==0.4.0'` then `python ../Track-4-Toolkit/validate.py --entry track4_service.py` |
-| Install and test everything | `pip install '.[messaging,dev]'` then `python -m pytest -q` |
+| Install and test everything | `python3.12 -m venv .venv && . .venv/bin/activate`, `pip install '.[messaging,dev]'`, then `python -m pytest -q` |
 | Run the three-node protected workflow | `python -m trustverify demo --directory runtime/first-demo` |
 | Watch the live log and contain alerts | `python -m trustverify watch --state ... --operator ... --identity ...` (see [Detection and evaluation](#detection-and-evaluation)) |
 | Detector on toolkit practice data | `python -m trustverify practice --toolkit ../Track-4-Toolkit/practice` |
@@ -48,7 +48,7 @@ State lives in `TRACK4_STATE_DIR`, or `<system temp>/trustverify-track4` when un
 
 **Shared temp directory.** When `TRACK4_STATE_DIR` is unset, `<system temp>/trustverify-track4` is created 0700 and refused if it already exists as a symlink, belongs to another user, or is group/world-writable, so a directory planted by another local user cannot capture or redirect state. Lock files and audit-log appends use `O_NOFOLLOW`.
 
-**Detection and response.** Denials that look like probing append a signed `alert` event next to the decision it explains: `cross_owner_access` (a valid identity asks for an asset it does not own), `revoked_actor_access`, `disabled_actor_access`, `request_id_replay` (a reused request ID, which is denied without changing the recorded decision) and `malformed_request`. Early validation failures, including missing request IDs, unknown operations, invalid JSON and invalid UTF-8, create sanitized `invalid_request` decisions and linked malformed-request alerts when existing state and its full audit chain verify. Unparseable identities remain anonymous; raw input and protected bodies are never logged. These records do not replace the request-ID decision index. Failed integrity checks leave the unverified log untouched. `{"op":"alerts"}` returns the most recent 200 for the operator; the full set stays in the verifiable log. The response is the denial itself plus the alert; the adapter does not lock identities out automatically, because adapter v1 callers expect a legitimate owner's later reads to keep working.
+**Detection and response.** Denials that look like probing append a signed `alert` event next to the decision it explains: `cross_owner_access` (a valid identity asks for an asset it does not own), `revoked_actor_access`, `disabled_actor_access`, `request_id_replay` (a reused request ID, which is denied without changing the recorded decision) and `malformed_request`. Early validation failures, including missing request IDs, unknown operations, invalid JSON and invalid UTF-8, create sanitized `invalid_request` decisions and linked malformed-request alerts when existing state and its full audit chain verify. Unparseable identities remain anonymous; raw input and protected bodies are never logged. These records do not replace the request-ID decision index. Failed integrity checks leave the unverified log untouched. Each alert names the `identity`, the `services` it touched (`protected-resource`, the asset declared in `threat-model.json`), the `operation` and `asset`, the supporting `events` (the decision's sequence number and the alert's own), the `rule`, an `explanation` and the closest ATT&CK technique. `{"op":"alerts"}` returns the most recent 200 for the operator; the full set stays in the verifiable log. The response is the denial itself plus the alert; the adapter does not lock identities out automatically, because adapter v1 callers expect a legitimate owner's later reads to keep working.
 
 **Self-assessment.** [scripts/attack_adapter.py](scripts/attack_adapter.py) runs 20 assessor-style probes, each in a fresh process like the grader: malformed and hostile input, look-alike identities, request-ID replay after revocation, log injection, `protected_read` key and challenge validation, parallel requests, on-disk state and log tampering, alerting, key-material leakage and a planted shared temp directory. All 20 hold; see [reports/adapter_attack.json](reports/adapter_attack.json). Before this hardening, 6 of them failed.
 
@@ -84,12 +84,13 @@ The lab binds to `127.0.0.1` only, rejects requests whose `Host` header is not l
 
 ## Clean-machine setup
 
-Requires Linux, Python 3.12 or newer, and Internet access during dependency installation. The full prototype uses the optional `messaging` extra (`cryptography`); the grader adapter above does not. The crash tests use Linux `fork` and the authority uses POSIX file locking. No database server, PQ library build, API key or account is required. Cryptography wheels include their OpenSSL backend on supported platforms.
+Requires Linux, **Python 3.12** (the judging runtime's version and the one CI tests; `requires-python` also admits newer versions, which have wheels for both pinned dependencies but are not what we test), and Internet access during dependency installation. The full prototype uses the optional `messaging` extra (`cryptography`); the grader adapter above does not. The crash tests use Linux `fork` and the authority uses POSIX file locking. No database server, PQ library build, API key or account is required. Cryptography wheels include their OpenSSL backend on supported platforms.
 
 From the repository root:
 
 ```sh
-python3 -m venv .venv
+python3.12 --version            # must print Python 3.12.x; install 3.12 first if it is missing
+python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install '.[messaging,dev]'
@@ -102,7 +103,7 @@ The demo directory must be new. Choose another directory for a second run; prior
 Alternatively, with [uv](https://docs.astral.sh/uv/):
 
 ```sh
-uv sync --extra messaging --extra dev --locked
+uv sync --python 3.12 --extra messaging --extra dev --locked
 uv run --extra messaging --extra dev --locked pytest -q
 uv run --extra messaging --locked trustverify demo --directory runtime/first-demo
 ```
@@ -212,7 +213,7 @@ Rules detect:
 
 Requests that fail authentication do not each write a signed audit record. They are summarised as one signed `unauthenticated_rejections` event per 100 failures or 60 seconds, and each HTTP node throttles them with a token bucket (burst 20, 10 per second, HTTP 429). Requests that authenticate never draw from that bucket.
 
-Alerts identify the beneficiary identity, acting identity, services, supporting immutable event IDs, rule and explanation. A currently valid credential can still trigger a service-transition alert. Approved administration is context, not a blanket exclusion for all administrators. This is a small workflow-specific detector, not a general UEBA system.
+Alerts identify the beneficiary identity, acting identity, services, supporting immutable event IDs, rule, explanation and the closest MITRE ATT&CK technique (`attack_technique`). A currently valid credential can still trigger a service-transition alert. Approved administration is context, not a blanket exclusion for all administrators. This is a small workflow-specific detector, not a general UEBA system.
 
 **Timing bounds (one range for both detectors, defined in [trustverify/constants.py](trustverify/constants.py)):** trusted source offsets up to **±120 seconds**, corrected event arrival lateness up to **30 seconds**, and at most **1 second** of negative corrected delay. A watermark buffer orders events within that range. Untrusted offsets, equal ambiguous timestamps and out-of-range events produce timing notices; ambiguous events cannot establish a definite service path. Non-temporal revocation/privilege checks still run. Offset estimates must come from a trusted collector, never arbitrary client fields. Authority-native events already use the authority clock.
 
@@ -266,6 +267,24 @@ Read latency stays flat as the log grows (first 10%: 42.7 ms, last 10%: 45.1 ms)
 Mock-service nodes, measured with [scripts/bench_nodes.py](scripts/bench_nodes.py) ([reports/node_bench.json](reports/node_bench.json)): a full signed request (fetch challenge, ML-DSA-65 sign and verify, permission check, signed audit commit) takes a median of 12.5 ms (p95 17.5 ms); eight concurrent clients sustain about 86 requests per second against one node; an unauthenticated denial costs 6.8 ms. Each node serves connections on separate threads with at most 64 in flight (JSON 503 beyond that), a 5-second socket timeout, no Python version banner and `X-Content-Type-Options: nosniff`. The client receives a normal `Denied` with status 503 at capacity and can retry after connections close; a stalled client below the cap does not serialize other connections.
 
 Full prototype, from [reports/demo.json](reports/demo.json): encrypt and sign a 96 KiB transfer in 2.2 ms (ciphertext 99,440 bytes for 98,304 bytes of plaintext, signed manifest 10,841 bytes); receive, decrypt and commit in 3.7 ms; revocation request to last observed node rejection 98 ms; live detection and containment 0.11 s after the event is logged. The authority rehashes its whole state on every request, which favours verifiability over scale.
+
+## Design choices and researched alternatives
+
+How we treated each topic from the Track 4 research list, including what we chose not to build.
+
+| Topic | What we did | Why, and what is left out |
+|---|---|---|
+| ML-DSA vs. SLH-DSA (FIPS 204 vs. 205) | ML-DSA-65 for device, request, audit and checkpoint signatures | ML-DSA signatures are about 3.3 KB and fast enough to sign every request and audit record (12.5 ms per full signed request). SLH-DSA relies only on hash security, a useful hedge for long-lived roots, but its signatures are 8 to 50 KB and much slower to sign. `pqcrypto` 0.4.0 ships only the pre-standard SPHINCS+ variants, not FIPS 205 SLH-DSA, so we did not use it. A hash-based signature for the operator trust root would be the natural next step. |
+| Double Ratchet / PQXDH | Not implemented. Each transfer uses a fresh one-use hybrid ML-KEM-768 + X25519 offer signed by the recipient. | This gives forward secrecy per transfer without long-lived session state. It does **not** give post-compromise healing within a conversation, which a ratchet would. This is stated as a limit. |
+| Replay windows | Authority-signed 30-second challenges bound to node, device, cluster and epoch. Consumed IDs are kept transactionally until expiry, and a restore bumps the epoch. | A replay is rejected inside the window by the consumed-ID record and after it by expiry, on every node and across restarts. The adapter rejects a reused `request_id` permanently. |
+| Session resumption | Unsupported on purpose | An interrupted transfer needs a fresh signed offer, so a session ID is never a bearer credential. |
+| Rotation grace window | Zero grace for new requests. Transfers admitted before the rotation can continue for at most 120 seconds. | The cutoff is the authority commit. Revocation overrides the continuation. |
+| WAL / atomic commits | SQLite WAL with `synchronous=FULL` and `BEGIN IMMEDIATE`. Each lifecycle change, decision and audit event commit in one transaction. The adapter uses lock, temp file, fsync and rename. | Recovery is tested by killing real processes before and after commit. |
+| Merkle logs (CT-style) | A linear hash chain with a per-record ML-DSA signature and a separately retained signed checkpoint | This detects edits, reordering, deletion and truncation before the checkpoint. A Merkle tree would add compact inclusion and consistency proofs for third-party auditors. We did not need them for a single-operator sandbox, and the chain is simpler to verify. |
+| CWE-117 log injection | The actor and action come from verified credentials. User text stays nested in `details` and is canonically JSON-encoded, so a newline cannot start another event. | Tested in the prototype and in the adapter attack script. |
+| Graph-based detection | A service-transition graph per identity: an allowed-edge policy plus a learned per-role edge baseline (`practice`) | This is a small explainable rule set, not general graph analytics or UEBA. |
+| MITRE ATT&CK lateral movement | Every alert carries its closest technique in `attack_technique`: T1098 for unapproved and self-approved grants, T1078 for revoked or valid-account misuse, T1021 / TA0008 for unexpected service transitions, T1550 for request replay and T1190 for malformed probing | The tag is a labelling aid for analysts, not a claim of full technique coverage. |
+| Hybrid logical clocks | Not used. Authorization relies on authority transaction order only. Detection corrects trusted source offsets (±120 s), buffers 30 s of lateness and flags ambiguous order. | Order that cannot be established is reported as uncertain instead of being guessed. An HLC would order events across independent authorities, which this single-authority design does not have. |
 
 ## Objective-to-evidence checklist
 

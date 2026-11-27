@@ -38,6 +38,7 @@ from pathlib import Path
 from pqcrypto.kem import ml_kem_768
 from pqcrypto.sign import ml_dsa_65
 
+from .constants import ATTACK_TECHNIQUES
 from .encoding import atomic_write, b64, canonical, unb64
 
 FORMAT = "trustverify/adapter/v1"
@@ -220,6 +221,9 @@ def _append(store, state, event):
     return body["seq"]
 
 
+# The protected service this adapter fronts, as declared in threat-model.json.
+ADAPTER_SERVICE = "protected-resource"
+
 ALERT_RULES = {
     "not the asset owner": ("cross_owner_access", "a valid identity asked for an asset it does not own"),
     "actor revoked": ("revoked_actor_access", "a revoked identity is still presenting requests"),
@@ -229,16 +233,26 @@ ALERT_RULES = {
 }
 
 
-def _alert(store, state, reason, related_seq, actor, asset, request_id=None):
-    """Append a signed alert for a suspicious denial. Fields are fixed strings or opaque IDs."""
+def _alert(store, state, reason, related_seq, actor, asset, request_id=None, op=None):
+    """Append a signed alert for a suspicious denial. Fields are fixed strings or opaque IDs.
+
+    Each alert names the identity, the service and operation it touched, the supporting
+    event sequence numbers (the decision it explains and the alert itself), the rule and a
+    plain-language explanation.
+    """
     if reason not in ALERT_RULES:
         return
     rule, explanation = ALERT_RULES[reason]
+    services = [ADAPTER_SERVICE]
+    technique = ATTACK_TECHNIQUES[rule]
     seq = _append(store, state, {"op": "alert", "rule": rule, "actor": actor, "asset": asset, "request_id": None,
                                  "subject_request_id": request_id, "related_seq": related_seq,
+                                 "services": services, "operation": op, "attack_technique": technique,
                                  "decision": "alert", "reason": explanation})
-    summary = {"seq": seq, "rule": rule, "actor": actor, "asset": asset, "related_seq": related_seq,
-               "subject_request_id": request_id}
+    summary = {"seq": seq, "rule": rule, "identity": actor, "actor": actor, "services": services,
+               "operation": op, "asset": asset,
+               "events": [n for n in (related_seq, seq) if n is not None], "related_seq": related_seq,
+               "subject_request_id": request_id, "explanation": explanation, "attack_technique": technique}
     state["alerts"] = (state.get("alerts", []) + [summary])[-MAX_ALERTS:]
 
 
@@ -350,7 +364,7 @@ def read(store, state, request):
     seq = _append(store, state, {"op": "read", "actor": actor, "asset": asset, "request_id": request_id,
                                  "decision": decision, "reason": reason})
     if decision != "allow":
-        _alert(store, state, reason, seq, actor, asset, request_id)
+        _alert(store, state, reason, seq, actor, asset, request_id, op="read")
     store.save(state)
     if decision == "allow":
         return {"decision": "allow", "body": state["contents"][asset]}
@@ -363,7 +377,8 @@ def _replayed(store, state, request, request_id):
         return False
     actor = request.get("actor") if isinstance(request.get("actor"), str) and IDENTIFIER.fullmatch(request["actor"]) else None
     asset = request.get("asset") if isinstance(request.get("asset"), str) and IDENTIFIER.fullmatch(request["asset"]) else None
-    _alert(store, state, "request_id replay", None, actor, asset, request_id)
+    op = request.get("op") if request.get("op") in {"read", "protected_read"} else None
+    _alert(store, state, "request_id replay", None, actor, asset, request_id, op=op)
     store.save(state)
     return True
 
@@ -416,7 +431,7 @@ def protected_read(store, state, request):
                                  "challenge_sha256": hashlib.sha256(challenge.encode("utf-8")).hexdigest()
                                  if isinstance(challenge, str) else None})
     if decision != "allow":
-        _alert(store, state, reason, seq, actor, asset, request_id)
+        _alert(store, state, reason, seq, actor, asset, request_id, op="protected_read")
     store.save(state)
     if decision != "allow":
         return {"decision": "deny"}
@@ -460,7 +475,8 @@ def record_malformed(request, directory=None):
                                          "actor": ids["actor"], "asset": ids["asset"], "request_id": None,
                                          "subject_request_id": ids["request_id"],
                                          "decision": "deny", "reason": "malformed request"})
-            _alert(store, state, "malformed request", seq, ids["actor"], ids["asset"], ids["request_id"])
+            _alert(store, state, "malformed request", seq, ids["actor"], ids["asset"], ids["request_id"],
+                   op=ids["op"])
             store.save(state)
         return True
     except Exception:  # noqa: BLE001 - reporting must never change the fail-closed reply

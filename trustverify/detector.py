@@ -4,7 +4,7 @@ import heapq
 import math
 import statistics
 
-from .constants import MAX_CLOCK_OFFSET, MAX_LATENESS, MAX_NEGATIVE_SKEW
+from .constants import ATTACK_TECHNIQUES, MAX_CLOCK_OFFSET, MAX_LATENESS, MAX_NEGATIVE_SKEW
 
 PATH_WINDOW = 60
 APPROVED_EDGES = {("frontend", "billing"), ("billing", "frontend")}
@@ -29,7 +29,7 @@ def analyze(events):
         alerts.append({"event_id": event["id"], "identity": identities,
                        "acting_identity": event["actor"], "services": services,
                        "events": evidence, "rule": rule, "explanation": explanation,
-                       "alert_at": alert_at})
+                       "attack_technique": ATTACK_TECHNIQUES[rule], "alert_at": alert_at})
 
     def process(event, occurred, alert_at, temporal=True):
         action, details = event["action"], event.get("details", {})

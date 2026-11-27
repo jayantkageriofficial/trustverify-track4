@@ -11,7 +11,8 @@
       ],
       "trigger": "evt-008",
       "alert_at": 1768467840.1,
-      "explanation": "viewer -> operator with no matching approval (subject, role, validity window and a different approver)."
+      "explanation": "viewer -> operator with no matching approval (subject, role, validity window and a different approver).",
+      "attack_technique": "T1098 Account Manipulation"
     },
     {
       "rule": "activity_after_unapproved_role_change",
@@ -26,7 +27,8 @@
       ],
       "trigger": "evt-009",
       "alert_at": 1768467840.1,
-      "explanation": "Allowed activity in the same session after an unapproved role change."
+      "explanation": "Allowed activity in the same session after an unapproved role change.",
+      "attack_technique": "T1078 Valid Accounts"
     },
     {
       "rule": "lateral_movement_sequence",
@@ -42,7 +44,8 @@
       ],
       "trigger": "evt-011",
       "alert_at": 1768467902.2,
-      "explanation": "2 edges outside the service-reader policy in one session and flow: reports -> billing -> archive (outcomes: deny). Candidate only; denials do not show access."
+      "explanation": "2 edges outside the service-reader policy in one session and flow: reports -> billing -> archive (outcomes: deny). Candidate only; denials do not show access.",
+      "attack_technique": "T1021 Remote Services (TA0008 Lateral Movement)"
     },
     {
       "rule": "lateral_movement_sequence",
@@ -60,7 +63,8 @@
       ],
       "trigger": "evt-012",
       "alert_at": 1768467902.2,
-      "explanation": "3 edges outside the service-reader policy in one session and flow: reports -> billing -> archive -> identity (outcomes: deny). Candidate only; denials do not show access."
+      "explanation": "3 edges outside the service-reader policy in one session and flow: reports -> billing -> archive -> identity (outcomes: deny). Candidate only; denials do not show access.",
+      "attack_technique": "T1021 Remote Services (TA0008 Lateral Movement)"
     }
   ],
   "notices": [

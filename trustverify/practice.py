@@ -33,7 +33,7 @@ import statistics
 from datetime import datetime
 from pathlib import Path
 
-from .constants import MAX_CLOCK_OFFSET, MAX_LATENESS, MAX_NEGATIVE_SKEW
+from .constants import ATTACK_TECHNIQUES, MAX_CLOCK_OFFSET, MAX_LATENESS, MAX_NEGATIVE_SKEW
 
 REVIEW_WINDOW = 600
 SEQUENCE_WINDOW = 300
@@ -85,7 +85,8 @@ def analyze(events, approvals, policy, learn=True):
     def alert(rule, event, evidence, explanation, services, alert_at):
         alerts.append({"rule": rule, "identity": event["actor"], "services": services,
                        "events": evidence, "trigger": event["event_id"],
-                       "alert_at": alert_at, "explanation": explanation})
+                       "alert_at": alert_at, "explanation": explanation,
+                       "attack_technique": ATTACK_TECHNIQUES[rule]})
 
     def scope_allows(event, at):
         change = approvals.get(event["approval_id"]) if event["approval_id"] else None

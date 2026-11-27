@@ -199,3 +199,36 @@ def test_connection_capacity_is_a_json_503_that_remote_can_handle(sandbox):
             process.wait(timeout=5)
         process.stdout.close()
         process.stderr.close()
+
+
+def test_rotated_and_revoked_keys_stay_rejected_on_every_node_after_restart(sandbox):
+    """'Rejected' must hold on every node and survive stopping every node process and
+    reopening (and recovering) the authority, not only within one running cluster."""
+    from trustverify.authority import Authority
+    from trustverify.client import Identity
+    from trustverify.crypto import new_identity
+
+    authority, operator, alice, bob = sandbox
+    replacement = new_identity()
+    with nodes(authority) as remotes:
+        old = {node: Client(api, alice, authority.trust) for node, api in remotes.items()}
+        # Signed before the change, submitted only after the restart.
+        stale = {node: client.envelope("access", {}) for node, client in old.items()}
+        bob_stale = {node: Client(api, bob, authority.trust).envelope("access", {}) for node, api in remotes.items()}
+        assert old["node-a"].call("rotate", **alice.rotation(replacement))["version"] == 2
+        operator.call("revoke", device=bob.device)
+    # Every node process has exited. Reopen the authority as a restarted host would.
+    restarted = Authority(authority.directory, authority.operator)
+    restarted.recover()
+    rotated = Identity(alice.device, replacement, 2)
+    with nodes(restarted) as remotes:
+        for node, api in remotes.items():
+            with pytest.raises(Denied, match="retired"):
+                Client(api, alice, restarted.trust).call("access")
+            with pytest.raises(Denied):
+                api.request(stale[node])
+            with pytest.raises(Denied, match="revoked"):
+                Client(api, bob, restarted.trust).call("access")
+            with pytest.raises(Denied):
+                api.request(bob_stale[node])
+            assert Client(api, rotated, restarted.trust).call("access")["actor"] == "alice"
